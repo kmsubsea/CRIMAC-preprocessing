@@ -16,5 +16,6 @@ numpy
 scipy
 matplotlib
 psutil
+xml.dom.minidom
 git+https://github.com/CI-CMG/pyEcholab.git@RHT-EK80#egg=pyEcholab
 git+https://github.com/CRIMAC-WP4-Machine-learning/CRIMAC-annotationtools.git#egg=annotationtools
