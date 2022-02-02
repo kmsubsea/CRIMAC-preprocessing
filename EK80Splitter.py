@@ -3,8 +3,11 @@ import logging
 import os
 import sys
 import struct as struct
+import traceback
 from collections import namedtuple
 from xml.dom.minidom import parseString
+
+from numpy import byte
     
 # Return full datagram as tuple (head,data) or None
 def get_dg(inp_fp):
@@ -73,6 +76,90 @@ def ek_read_dg(stream, skip=False):
 def ek_write_dg(stream, dg, update_checksum = 1):
     return stream.write(dg.Data)
 
+def adjustInitialParameters(dg, mode, channelsRemoved):
+    #subtract header
+    data = struct.unpack_from('llll', dg)
+    length = data[0]
+    xml = dg[16:-4]
+    
+    modeMapping = '0' #CW
+    if(mode == 'FM'):
+        modeMapping = '1'
+    #open xml
+    dgStr = xml.decode('UTF-8')
+    dgStr = dgStr.rstrip('\x00')
+    try:
+        #parse xml
+        xmldoc = parseString(dgStr)
+        #remove channel
+        configuration = xmldoc.getElementsByTagName('Channel')
+        print("found " + str(len(configuration)) + " channels")
+        for channel in configuration:
+            if(channel.attributes['PulseForm'].value != modeMapping):
+                parent = channel.parentNode
+                parent.removeChild(channel)
+                print('Removing channel ' + channel.attributes['ChannelID'].value)
+                channelsRemoved.append(channel.attributes['ChannelID'].value)
+        xmlDocEnc = xmldoc.toxml()
+        encodedString = xmlDocEnc.encode()
+        newInitial = bytearray(encodedString)
+        newLength = 12+len(newInitial)  #padding bytes?
+        #create datagram (take care of length)
+        header = struct.pack('llll',newLength, data[1], data[2], data[3])
+        footer = struct.pack('l',newLength)
+        newDg = header + newInitial + footer
+        last = open("lastinitial.xml", "w")
+        last.write(str(newDg));
+        return bytearray(newDg)       
+    except Exception as e:
+        print("could not parse initalParameters for channels, inspect inital.xml for clues")
+        print(e)
+        traceback.print_exc()
+        config = open("initial.xml", "w")
+        config.write(dgStr);
+        config.close()
+    #create datagram (take care of length)
+
+def adjustConfig(dg, channelIdsToRemove, postfix):
+    #subtract header
+    data = struct.unpack_from('llll', dg)
+    xml = dg[16:-4]
+    
+    #open xml
+    dgStr = xml.decode('UTF-8')
+    dgStr = dgStr.rstrip('\x00')
+    try:
+        #parse xml
+        xmldoc = parseString(dgStr)
+        #remove channel
+        configuration = xmldoc.getElementsByTagName('Channel')
+        print("found " + str(len(configuration)) + " channels")
+        for channel in configuration:
+            for idToRemove in channelIdsToRemove:
+                if(channel.attributes['ChannelID'].value == idToRemove):
+                    parent = channel.parentNode
+                    parent.removeChild(channel)
+                    print('Removing channel ' + channel.attributes['ChannelID'].value + ' as its not equal to ' + idToRemove)
+                    
+        xmlDocEnc = xmldoc.toxml()
+        encodedString = xmlDocEnc.encode()
+        newInitial = bytearray(encodedString)
+        newLength = 12+len(newInitial)  #padding bytes?
+        #create datagram (take care of length)
+        header = struct.pack('llll',newLength, data[1], data[2], data[3])
+        footer = struct.pack('l',newLength)
+        newDg = header + newInitial + footer
+        last = open("lastConfig" + postfix+ ".xml", "w")
+        last.write(str(newDg));
+        return bytearray(newDg)        
+    except Exception as e:
+        print("could not parse config for channels, inspect config.xml for clues")
+        print(e)
+        traceback.print_exc()
+        config = open("config.xml", "w")
+        config.write(dgStr);
+        config.close()
+
 def extract_channels(dg):
     channels = []
     dgStr = str(dg)
@@ -123,6 +210,29 @@ def extract_channel(dg):
         config.close()
         exit()
     return channel
+
+def extract_filter_channel(dg):
+    channelId = dg
+    #open xml
+    dgStr = str(channelId)
+    start = dgStr.find("WBT")
+    end = dgStr.find("00")
+    dgStr = dgStr[start:start+128]
+    end = dgStr.find('\\')  ##First slash after end of channelid
+    dgStr = dgStr[0:end]
+    try:       
+        return dgStr
+            
+    except Exception as e:
+        print("could not parse configuration for filter, inspect filter.xml for clues")
+        print(e)
+        config = open("filter.txt", "w")
+        print(dgStr)
+        print(str(dg))
+        config.write(dgStr);
+        config.close()
+        exit()
+    return ""
 
 def extract_separator(dg):
     frequency = 0
@@ -258,7 +368,6 @@ else:
     print("eg py EK80Splitter.py input.raw size 100")
     print("eg py EK80Splitter.py input.raw mode")
     print("available split modes is size [inputsize in MB], mode or channel")
-    exit()   
     
 #TODO, create argument library or split to separate file.
 filename = sys.argv[1];
@@ -292,6 +401,9 @@ with open(filename, 'rb') as dg_file:
         outputfile = BufferedWriter
         currentChannelFiles = []
         currentChannelFile = BufferedWriter
+        removedChannelIdsCW = []
+        removedChannelIdsFM = []
+        filterDatagrams = []
         
         
         if(splitOnSize):
@@ -330,7 +442,7 @@ with open(filename, 'rb') as dg_file:
                     initialparameter = dg[1]
                 if(mode == 'Config'):
                     print("Configuration captured")
-                    configuration = dg[1]
+                    configuration = dg[1]                 
                     if(splitOnChannel):
                         #create filehandles for channels
                         print("identifying channels")
@@ -351,8 +463,25 @@ with open(filename, 'rb') as dg_file:
                     elif(currentMode == 'FM'):
                         outputfileFM.write(dg[1])
                     else:
-                        outputfileCW.write(dg[1])
-                        outputfileFM.write(dg[1])
+                        if(currentMode == 'Initial'):
+                            cwInitial = adjustInitialParameters(dg[1], 'CW', removedChannelIdsCW)
+                            fmInitial = adjustInitialParameters(dg[1], 'FM', removedChannelIdsFM)
+                            cwConfig = adjustConfig(configuration,removedChannelIdsCW,'CW')
+                            fmConfig = adjustConfig(configuration,removedChannelIdsFM,'FM')
+                            print('writing config to CW')
+                            outputfileCW.write(cwConfig)
+                            print('writing config to FM')
+                            outputfileFM.write(fmConfig)                           
+                            print('writing initial to CW')
+                            outputfileCW.write(cwInitial)
+                            print('writing initial to FM')
+                            outputfileFM.write(fmInitial)
+                        elif(currentMode == 'Config'):
+                            #delay the writing of config
+                            print('delay config write')    
+                        else:
+                            outputfileCW.write(dg[1])
+                            outputfileFM.write(dg[1])
                 elif(dgType == b'RAW3'):
                     if(currentMode == 'CW'):
                         outputfileCW.write(dg[1])
@@ -363,10 +492,30 @@ with open(filename, 'rb') as dg_file:
                         outputfileCW.write(dg[1])
                     else:
                         outputfileFM.write(dg[1])
+                elif(dgType == b'FIL1'):
+                    filterchannel = extract_filter_channel(dg[1])
+                    cwRemove = False
+                    fmRemove = False
+                    for channel in removedChannelIdsCW:
+                        if(channel == filterchannel):
+                            cwRemove = True
+                    for channel in removedChannelIdsFM:
+                        if(channel == filterchannel):
+                            fmRemove = True
+                    if(not cwRemove):
+                        print("filter file for cw found in " + filterchannel)
+                        outputfileCW.write(dg[1])
+                    if(not fmRemove):
+                        outputfileFM.write(dg[1])
+                        print("filter file for FM found in " + filterchannel)
+                        
                 else:
                     outputfileCW.write(dg[1])
                     outputfileFM.write(dg[1])
-                    
+            
+            if(splitOnSize):
+                if(dgType == b'FIL1'):
+                        filterDatagrams.append(dg[1])     
             #SPLIT on SIZE  
             if(splitOnSize):      
                 if(dgType == b'RAW3'):
@@ -376,10 +525,13 @@ with open(filename, 'rb') as dg_file:
                         outputfile.flush()
                         outputfile.close()
                         filecounter = filecounter + 1
-                        outputfile = open('output' + str(filecounter) + '.raw', 'wb')
+                        outputfile = open(baseName + '_size' + str(filecounter) + '.raw', 'wb')
                         outputfile.write(configuration)
                         outputfile.write(initialparameter)
                         outputfile.write(environment)
+                        #All files need the filters
+                        for filters in filterDatagrams:
+                            outputfile.write(filters)
                         
             #SPLIT on Channel
             if(splitOnChannel):
@@ -406,6 +558,17 @@ with open(filename, 'rb') as dg_file:
                     currentChannelFile.write(dg[1])
                 elif(dgType == b'RAW4'):
                     currentChannelFile.write(dg[1])
+                elif(dgType == b'FIL1'):
+                    filterchannel = extract_filter_channel(dg[1])
+                    filterchannel = filterchannel.replace('|','_')
+                    #only write to correct file
+                    for filehandle in currentChannelFiles:
+                            #print(filehandle)
+                            position = filehandle.name.find(filterchannel)                           
+                            if(position > 0):                                
+                                #set current file to write to, figure out the "if"
+                                print("writing filter on channel " + filterchannel)
+                                filehandle.write(dg[1])
                 else:
                     for filehandle in currentChannelFiles:
                         filehandle.write(dg[1]) 
