@@ -1,3 +1,29 @@
+"""
+EK80 splitting Preprocessing Script
+
+Reads EK80 raw files and convert it into smaller splitted EK80 raw files
+
+Copyright (C) 2020, Arne Hestnes, and Kongsberg Maritime, Norway.
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License
+along with this program; if not, write to the Free Software Foundation,
+Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+"""
+# Set a the version here
+__version__ = 0.9
+
+
 from io import BufferedWriter
 import logging
 import os
@@ -47,6 +73,7 @@ def get_dgs_generator(inp_fp, match_types = None):
         else:
             break
 
+# Reads the EK80 datagram header
 def ek_read_head(stream, noskip_types=[], force_full_read=False):
     buff = stream.read(struct.calcsize(ekDatagram.headDesc))
     if len(buff) == 0:
@@ -65,6 +92,8 @@ def ek_read_head(stream, noskip_types=[], force_full_read=False):
     fulldata = buff + data
     return (Head, fulldata)
 
+
+#Reads the EK80 datagram
 def ek_read_dg(stream, skip=False):
     force_full_read = not skip
     data = ek_read_head(stream, force_full_read = force_full_read)
@@ -72,10 +101,9 @@ def ek_read_dg(stream, skip=False):
         return data
     else:
         return None
-
-def ek_write_dg(stream, dg, update_checksum = 1):
-    return stream.write(dg.Data)
-
+    
+#Adjust the initial parameters to remove unwanted channels.
+#Reads the header, parses the xml, finds the undesired channels and returns the new datagram.
 def adjustInitialParameters(dg, mode, channelsRemoved):
     #subtract header
     data = struct.unpack_from('llll', dg)
@@ -120,6 +148,8 @@ def adjustInitialParameters(dg, mode, channelsRemoved):
         config.close()
     #create datagram (take care of length)
 
+#Adjust the configuration parameters to remove unwanted channels.
+#Reads the header, parses the xml, finds the undesired channels and returns the new datagram.
 def adjustConfig(dg, channelIdsToRemove, postfix):
     #subtract header
     data = struct.unpack_from('llll', dg)
@@ -160,6 +190,8 @@ def adjustConfig(dg, channelIdsToRemove, postfix):
         config.write(dgStr);
         config.close()
 
+#Returns the list of channels
+#todo, consider moving to rstrip isntead of dgStr.find to isolate the xml tags.
 def extract_channels(dg):
     channels = []
     dgStr = str(dg)
@@ -184,6 +216,7 @@ def extract_channels(dg):
         config.close()
     return channels
 
+#Returns the channelid of the Parameter xml datagram
 def extract_channel(dg):
     channel = ''
     dgStr = str(dg)
@@ -211,6 +244,8 @@ def extract_channel(dg):
         exit()
     return channel
 
+
+#Extract the channelid of the filterfile
 def extract_filter_channel(dg):
     channelId = dg
     #open xml
@@ -234,6 +269,8 @@ def extract_filter_channel(dg):
         exit()
     return ""
 
+#Parses the XML and descides what type of xml this is, config, init, environment etc.
+#todo, change to rstrip instead of dgStr.find.
 def extract_separator(dg):
     frequency = 0
     dgStr = str(dg);
@@ -282,6 +319,7 @@ def extract_separator(dg):
     
     return (frequency, mode)
 
+#Object to describe the EK80 datagram (very rough, refer to documentation to complete this if needed.)
 class ekDatagram:
     headDesc = 'i4s'
     bodyDesc = 'iil'
@@ -338,6 +376,8 @@ class ekDatagram:
         else:
             print("Called in a depricated way.")
 
+
+# Set initial starting values
 size = 1000000
 sizeMultiplier = 1000000
 
@@ -346,6 +386,7 @@ splitOnSize = False
 splitOnMode = False
 
 
+#Validate arguments
 if(len(sys.argv) > 2):
     splittype = sys.argv[2]
     if(splittype == '-h'):
@@ -383,7 +424,7 @@ if(splitOnSize):
 if(splitOnMode):
     print("Splitting on mode")
 
-
+#Handle the input .raw file, given the arguments.
 with open(filename, 'rb') as dg_file:
         filecounter = 0
         position = 0

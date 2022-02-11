@@ -2,3 +2,9 @@
 *~
 *.raw
 
+config.xml
+initial.xml
+lastConfig.xml
+lastConfigCW.xml
+lastConfigFM.xml
+lastinitial.xml
